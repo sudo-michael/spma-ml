@@ -44,14 +44,16 @@ if __name__ in "__main__":
     config = vars(args)
 
     # exclude arguments not apart of SPMA parameters
-    exp_name = config.pop("exp_name")
     use_wandb = config.pop("use_wandb")
+    exp_name = config.pop("exp_name")
+    env_id = config.pop('env_id')
+    config.pop('algo')
     timesteps = config.pop('total_timesteps')
 
     log_dir_parts = [
         "logs",
         exp_name,
-        f"env_{args.env_id}",
+        f"env_{env_id}",
         f"eta_{args.eta}",
         f"seed_{args.seed}",
     ]
@@ -69,7 +71,7 @@ if __name__ in "__main__":
         )
 
 
-    model = SPMA("MlpPolicy", args.env_id, timesteps, c_actor=0.5, c_critic=0.5, **config)
+    model = SPMA("MlpPolicy", env_id, timesteps, **config)
     logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
     model.set_logger(logger)
     model.learn(total_timesteps=model.timesteps)
