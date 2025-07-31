@@ -69,7 +69,7 @@ if __name__ in "__main__":
         )
 
 
-    model = SPMA("MlpPolicy", args.env_id, timesteps, c_actor=0.5, c_critic=0.5)
+    model = SPMA("MlpPolicy", args.env_id, timesteps, c_actor=0.5, c_critic=0.5, **config)
     logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
     model.set_logger(logger)
     model.learn(total_timesteps=model.timesteps)
