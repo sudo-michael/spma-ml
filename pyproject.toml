@@ -1,26 +1,116 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stable_baselines3"
+version = "2.3.0"
+description = "Pytorch version of Stable Baselines, implementations of reinforcement learning algorithms."
+authors = [
+    {name = "Antonin Raffin", email = "antonin.raffin@dlr.de"},
+]
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+keywords = [
+    "reinforcement-learning-algorithms",
+    "reinforcement-learning",
+    "machine-learning",
+    "gymnasium",
+    "gym",
+    "openai",
+    "stable",
+    "baselines",
+    "toolbox",
+    "python",
+    "data-science",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "gymnasium>=0.28.1,<0.30",
+    "numpy>=1.20",
+    "torch>=1.13",
+    "cloudpickle",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+tests = [
+    "pytest",
+    "pytest-cov",
+    "pytest-env",
+    "pytest-xdist",
+    "mypy",
+    "ruff>=0.3.1",
+    "black>=24.2.0,<25",
+]
+docs = [
+    "sphinx>=5,<8",
+    "sphinx-autobuild",
+    "sphinx-rtd-theme>=1.3.0",
+    "sphinxcontrib.spelling",
+    "sphinx_copybutton",
+]
+extra = [
+    "opencv-python",
+    "pygame",
+    "tensorboard>=2.9.1",
+    "psutil",
+    "tqdm",
+    "rich",
+    "shimmy[atari]~=1.3.0",
+    "pillow",
+    "autorom[accept-rom-license]~=0.6.1",
+]
+extra_no_roms = [
+    "opencv-python",
+    "pygame",
+    "tensorboard>=2.9.1",
+    "psutil",
+    "tqdm",
+    "rich",
+    "shimmy[atari]~=1.3.0",
+    "pillow",
+]
+
+[project.urls]
+Code = "https://github.com/DLR-RM/stable-baselines3"
+Documentation = "https://stable-baselines3.readthedocs.io/"
+Changelog = "https://stable-baselines3.readthedocs.io/en/master/misc/changelog.html"
+"SB3-Contrib" = "https://github.com/Stable-Baselines-Team/stable-baselines3-contrib"
+"RL-Zoo" = "https://github.com/DLR-RM/rl-baselines3-zoo"
+SBX = "https://github.com/araffin/sbx"
+
+[tool.setuptools]
+packages = ["stable_baselines3"]
+package-dir = {"" = "."}
+include-package-data = true
+
+[tool.setuptools.package-data]
+stable_baselines3 = ["py.typed", "version.txt"]
+
 [tool.ruff]
-# Same as Black.
 line-length = 127
-# Assume Python 3.8
 target-version = "py38"
 
 [tool.ruff.lint]
-# See https://beta.ruff.rs/docs/rules/
 select = ["E", "F", "B", "UP", "C90", "RUF"]
-# B028: Ignore explicit stacklevel`
-# RUF013: Too many false positives (implicit optional)
 ignore = ["B028", "RUF013"]
 
 [tool.ruff.lint.per-file-ignores]
-# Default implementation in abstract methods
-"./stable_baselines3/common/callbacks.py"= ["B027"]
-"./stable_baselines3/common/noise.py"= ["B027"]
-# ClassVar, implicit optional check not needed for tests
-"./tests/*.py"= ["RUF012", "RUF013"]
-
+"./stable_baselines3/common/callbacks.py" = ["B027"]
+"./stable_baselines3/common/noise.py" = ["B027"]
+"./tests/*.py" = ["RUF012", "RUF013"]
 
 [tool.ruff.lint.mccabe]
-# Unlike Flake8, default to a complexity level of 10.
 max-complexity = 15
 
 [tool.black]
@@ -36,15 +126,12 @@ exclude = """(?x)(
   )"""
 
 [tool.pytest.ini_options]
-# Deterministic ordering for tests; useful for pytest-xdist.
 env = [
-	"PYTHONHASHSEED=0"
+    "PYTHONHASHSEED=0"
 ]
 
 filterwarnings = [
-    # Tensorboard warnings
     "ignore::DeprecationWarning:tensorboard",
-    # Gymnasium warnings
     "ignore::UserWarning:gymnasium",
 ]
 markers = [
@@ -55,13 +142,16 @@ markers = [
 disable_warnings = ["couldnt-parse"]
 branch = false
 omit = [
-  "tests/*",
-  "setup.py",
-  # Require graphical interface
-  "stable_baselines3/common/results_plotter.py",
-  # Require ffmpeg
-  "stable_baselines3/common/vec_env/vec_video_recorder.py",
+    "tests/*",
+    "setup.py",
+    "stable_baselines3/common/results_plotter.py",
+    "stable_baselines3/common/vec_env/vec_video_recorder.py",
 ]
 
 [tool.coverage.report]
-exclude_lines = [ "pragma: no cover", "raise NotImplementedError()", "if typing.TYPE_CHECKING:"]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError()",
+    "if typing.TYPE_CHECKING:",
+]
+
