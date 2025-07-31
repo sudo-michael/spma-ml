@@ -40,6 +40,8 @@ dependencies = [
     "cloudpickle",
     "pandas",
     "matplotlib",
+    "wandb>=0.21.0",
+    "tensorboard>=2.14.0",
 ]
 
 [project.optional-dependencies]

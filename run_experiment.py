@@ -1,0 +1,76 @@
+import os
+import argparse
+import wandb
+
+from stable_baselines3 import SPMA
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.results_plotter import load_results, ts2xy
+from stable_baselines3.common.logger import configure
+
+if __name__ in "__main__":
+
+    def str2bool(v):
+        """Convert string to boolean"""
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ("yes", "true", "t", "y", "1"):
+            return True
+        elif v.lower() in ("no", "false", "f", "n", "0"):
+            return False
+        else:
+            raise argparse.ArgumentTypeError(f"Boolean value expected, got: {v}")
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--use_wandb", type=str2bool, default=False, required=True)
+    parser.add_argument("--exp_name", type=str, required=True)
+
+    parser.add_argument("--env_id", type=str, required=True)
+    parser.add_argument("--seed", type=int, required=True)
+
+    algo_parsers = parser.add_subparsers(dest="algo", required=True)
+
+    spma_parser = algo_parsers.add_parser("SPMA")
+    spma_parser.add_argument("--n_steps", type=int, default=2048)
+    spma_parser.add_argument("--batch_size", type=int, default=2048)
+    spma_parser.add_argument("--use_armijo_actor", type=str2bool, default=False)
+    spma_parser.add_argument("--use_armijo_critic", type=str2bool, default=False)
+    spma_parser.add_argument("--total_timesteps", type=int, default=409600)
+    spma_parser.add_argument("--n_epochs", type=int, default=10)
+    spma_parser.add_argument("--eta", type=float)
+
+    args = parser.parse_args()
+
+    config = vars(args)
+
+    # exclude arguments not apart of SPMA parameters
+    exp_name = config.pop("exp_name")
+    use_wandb = config.pop("use_wandb")
+    timesteps = config.pop('total_timesteps')
+
+    log_dir_parts = [
+        "logs",
+        exp_name,
+        f"env_{args.env_id}",
+        f"eta_{args.eta}",
+        f"seed_{args.seed}",
+    ]
+
+    log_dir = os.path.join(*log_dir_parts)
+    # Ensure the directory exists
+    os.makedirs(log_dir, exist_ok=True)
+
+    if use_wandb:
+        wandb.init(
+            project=exp_name,
+            name=f"SPMA_eta{args.eta}_seed{args.seed}",
+            config=config,
+            sync_tensorboard=True,
+        )
+
+
+    model = SPMA("MlpPolicy", args.env_id, timesteps, c_actor=0.5, c_critic=0.5)
+    logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
+    model.set_logger(logger)
+    model.learn(total_timesteps=model.timesteps)
+
