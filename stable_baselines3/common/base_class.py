@@ -99,14 +99,16 @@ class BaseAlgorithm(ABC):
     observation_space: spaces.Space
     action_space: spaces.Space
     n_envs: int
-    lr_schedule: Schedule
+    lr_schedule_actor: Schedule
+    lr_schedule_critic: Schedule
     _logger: Logger
 
     def __init__(
         self,
         policy: Union[str, Type[BasePolicy]],
         env: Union[GymEnv, str, None],
-        learning_rate: Union[float, Schedule],
+        learning_rate_actor: Union[float, Schedule],
+        learning_rate_critic: Union[float, Schedule],
         policy_kwargs: Optional[Dict[str, Any]] = None,
         stats_window_size: int = 100,
         tensorboard_log: Optional[str] = None,
@@ -139,7 +141,8 @@ class BaseAlgorithm(ABC):
         self.seed = seed
         self.action_noise: Optional[ActionNoise] = None
         self.start_time = 0.0
-        self.learning_rate = learning_rate
+        self.learning_rate_actor = learning_rate_actor,
+        self.learning_rate_critic = learning_rate_critic,
         self.tensorboard_log = tensorboard_log
         self._last_obs = None  # type: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]
         self._last_episode_starts = None  # type: Optional[np.ndarray]
@@ -198,6 +201,9 @@ class BaseAlgorithm(ABC):
                 assert np.all(
                     np.isfinite(np.array([self.action_space.low, self.action_space.high]))
                 ), "Continuous action space must have a finite lower and upper bound"
+
+        # TODO: computing mean action for sMDPO like surrogates.
+        self.softmax_rep = False
 
     @staticmethod
     def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True) -> VecEnv:
@@ -272,7 +278,8 @@ class BaseAlgorithm(ABC):
 
     def _setup_lr_schedule(self) -> None:
         """Transform to callable if needed."""
-        self.lr_schedule = get_schedule_fn(self.learning_rate)
+        self.lr_schedule_actor = get_schedule_fn(self.learning_rate_actor[0])
+        self.lr_schedule_critic = get_schedule_fn(self.learning_rate_critic[0])
 
     def _update_current_progress_remaining(self, num_timesteps: int, total_timesteps: int) -> None:
         """
@@ -292,12 +299,18 @@ class BaseAlgorithm(ABC):
             An optimizer or a list of optimizers.
         """
         # Log the current learning rate
-        self.logger.record("train/learning_rate", self.lr_schedule(self._current_progress_remaining))
+        self.logger.record("train/learning_rate_actor", self.lr_schedule_actor(self._current_progress_remaining))
+        self.logger.record("train/learning_rate_critic", self.lr_schedule_critic(self._current_progress_remaining))
 
         if not isinstance(optimizers, list):
             optimizers = [optimizers]
-        for optimizer in optimizers:
-            update_learning_rate(optimizer, self.lr_schedule(self._current_progress_remaining))
+        for opt_name, optimizer in optimizers:
+            if opt_name == 'actor':
+                update_learning_rate(optimizer, self.lr_schedule_actor(self._current_progress_remaining))
+            elif opt_name == 'critic':
+                update_learning_rate(optimizer, self.lr_schedule_critic(self._current_progress_remaining))
+            else:
+                raise ValueError(f"Unknown optimizer name: {opt_name}")
 
     def _excluded_save_params(self) -> List[str]:
         """

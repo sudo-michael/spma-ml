@@ -33,6 +33,8 @@ from stable_baselines3.common.torch_layers import (
 from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
 from stable_baselines3.common.utils import get_device, is_vectorized_observation, obs_as_tensor
 
+from stable_baselines3.common.type_aliases import GymEnv
+
 SelfBaseModel = TypeVar("SelfBaseModel", bound="BaseModel")
 
 
@@ -68,7 +70,8 @@ class BaseModel(nn.Module):
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         features_extractor: Optional[BaseFeaturesExtractor] = None,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_actor: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_critic: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
@@ -84,7 +87,8 @@ class BaseModel(nn.Module):
         self.features_extractor = features_extractor
         self.normalize_images = normalize_images
 
-        self.optimizer_class = optimizer_class
+        self.optimizer_class_actor = optimizer_class_actor
+        self.optimizer_class_critic = optimizer_class_critic
         self.optimizer_kwargs = optimizer_kwargs
 
         self.features_extractor_class = features_extractor_class
@@ -449,7 +453,8 @@ class ActorCriticPolicy(BasePolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        lr_schedule: Schedule,
+        lr_schedule_actor: Schedule,
+        lr_schedule_critic: Schedule,
         net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
@@ -462,13 +467,17 @@ class ActorCriticPolicy(BasePolicy):
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         share_features_extractor: bool = True,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_actor: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_critic: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        env: Union[GymEnv, str] = None,
     ):
         if optimizer_kwargs is None:
             optimizer_kwargs = {}
             # Small values to avoid NaN in Adam optimizer
-            if optimizer_class == th.optim.Adam:
+            if optimizer_class_actor == th.optim.Adam :
+                optimizer_kwargs["eps"] = 1e-5
+            if optimizer_class_critic == th.optim.Adam :
                 optimizer_kwargs["eps"] = 1e-5
 
         super().__init__(
@@ -476,11 +485,18 @@ class ActorCriticPolicy(BasePolicy):
             action_space,
             features_extractor_class,
             features_extractor_kwargs,
-            optimizer_class=optimizer_class,
+            optimizer_class_actor=optimizer_class_actor,
+            optimizer_class_critic=optimizer_class_critic,
             optimizer_kwargs=optimizer_kwargs,
             squash_output=squash_output,
             normalize_images=normalize_images,
         )
+
+        # parameters of the actor and critic.
+        self.params_act = []
+        self.params_act_prev = []
+        self.params_critic = []
+        self.params_critic_prev = []
 
         if isinstance(net_arch, list) and len(net_arch) > 0 and isinstance(net_arch[0], dict):
             warnings.warn(
@@ -532,7 +548,10 @@ class ActorCriticPolicy(BasePolicy):
         # Action distribution
         self.action_dist = make_proba_distribution(action_space, use_sde=use_sde, dist_kwargs=dist_kwargs)
 
-        self._build(lr_schedule)
+        self._build(lr_schedule_actor, lr_schedule_critic)
+        
+        # adding the environment to do value sampling if needed.
+        self.env = env
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         data = super()._get_constructor_parameters()
@@ -548,9 +567,11 @@ class ActorCriticPolicy(BasePolicy):
                 squash_output=default_none_kwargs["squash_output"],
                 full_std=default_none_kwargs["full_std"],
                 use_expln=default_none_kwargs["use_expln"],
-                lr_schedule=self._dummy_schedule,  # dummy lr schedule, not needed for loading policy alone
+                lr_schedule_actor=self._dummy_schedule,  # dummy lr schedule, not needed for loading policy alone
+                lr_schedule_critic=self._dummy_schedule,  # dummy lr schedule, not needed for loading policy alone
                 ortho_init=self.ortho_init,
-                optimizer_class=self.optimizer_class,
+                optimizer_class_actor=self.optimizer_class_actor,
+                optimizer_class_critic=self.optimizer_class_critic,
                 optimizer_kwargs=self.optimizer_kwargs,
                 features_extractor_class=self.features_extractor_class,
                 features_extractor_kwargs=self.features_extractor_kwargs,
@@ -582,7 +603,7 @@ class ActorCriticPolicy(BasePolicy):
             device=self.device,
         )
 
-    def _build(self, lr_schedule: Schedule) -> None:
+    def _build(self, lr_schedule_actor: Schedule, lr_schedule_critic: Schedule) -> None:
         """
         Create the networks and the optimizer.
 
@@ -630,8 +651,54 @@ class ActorCriticPolicy(BasePolicy):
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
-        # Setup optimizer with initial learning rate
-        self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
+        # seperate the parameters of the actor and critic.
+        params_act_names = []
+        params_critic_names = []
+        all_names = []
+        for name, param in self.named_parameters():
+            if ("value_net" not in name) and ('vf_features_extractor' not in name):
+                self.params_act.append(param)
+                self.params_act_prev.append(param)
+                params_act_names.append(name)
+            else:
+                self.params_critic.append(param)
+                self.params_critic_prev.append(param)
+                params_critic_names.append(name)
+            all_names.append(name)
+
+        # build the optimizer for the actor and critic separately.
+        self.optimizer_act = self.optimizer_class_actor(self.params_act, lr=lr_schedule_actor(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
+        self.optimizer_critic = self.optimizer_class_critic(self.params_critic, lr=lr_schedule_critic(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
+
+
+    def forward_softmax_rep(self, obs: th.Tensor, deterministic: bool = False, sample_actions: bool = True) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        Forward pass in all the networks (actor and critic)
+
+        :param obs: Observation
+        :param deterministic: Whether to sample or use deterministic actions
+        :return: action, value and log probability of the action
+        """
+        # Preprocess the observation if needed
+        features = self.extract_features(obs)
+        if self.share_features_extractor:
+            latent_pi, latent_vf = self.mlp_extractor(features)
+        else:
+            pi_features, vf_features = features
+            latent_pi = self.mlp_extractor.forward_actor(pi_features)
+            latent_vf = self.mlp_extractor.forward_critic(vf_features)
+        distribution, z_kk = self._get_action_dist_from_latent(latent_pi)
+        values = self.value_net(latent_vf)
+
+        if not sample_actions:
+            return values, z_kk
+
+        # sample actions from the policy.
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        actions = actions.reshape((-1, *self.action_space.shape))  # type: ignore[misc]
+
+        return actions, values, log_prob, z_kk
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
@@ -649,12 +716,13 @@ class ActorCriticPolicy(BasePolicy):
             pi_features, vf_features = features
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        # Evaluate the values for the given observations
-        values = self.value_net(latent_vf)
-        distribution = self._get_action_dist_from_latent(latent_pi)
+
+        distribution, _ = self._get_action_dist_from_latent(latent_pi)
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
         actions = actions.reshape((-1, *self.action_space.shape))  # type: ignore[misc]
+        values = self.value_net(latent_vf)
+
         return actions, values, log_prob
 
     def extract_features(  # type: ignore[override]
@@ -691,18 +759,18 @@ class ActorCriticPolicy(BasePolicy):
         mean_actions = self.action_net(latent_pi)
 
         if isinstance(self.action_dist, DiagGaussianDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std)
+            return self.action_dist.proba_distribution(mean_actions, self.log_std), mean_actions
         elif isinstance(self.action_dist, CategoricalDistribution):
             # Here mean_actions are the logits before the softmax
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, MultiCategoricalDistribution):
             # Here mean_actions are the flattened logits
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, BernoulliDistribution):
             # Here mean_actions are the logits (before rounding to get the binary actions)
-            return self.action_dist.proba_distribution(action_logits=mean_actions)
+            return self.action_dist.proba_distribution(action_logits=mean_actions), mean_actions
         elif isinstance(self.action_dist, StateDependentNoiseDistribution):
-            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi)
+            return self.action_dist.proba_distribution(mean_actions, self.log_std, latent_pi), mean_actions
         else:
             raise ValueError("Invalid action distribution")
 
@@ -716,7 +784,7 @@ class ActorCriticPolicy(BasePolicy):
         """
         return self.get_distribution(observation).get_actions(deterministic=deterministic)
 
-    def evaluate_actions(self, obs: PyTorchObs, actions: th.Tensor) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
+    def evaluate_actions(self, obs: PyTorchObs, actions: th.Tensor, return_mean_actions: bool = False) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
         """
         Evaluate actions according to the current policy,
         given the observations.
@@ -734,10 +802,13 @@ class ActorCriticPolicy(BasePolicy):
             pi_features, vf_features = features
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        distribution, mean_actions = self._get_action_dist_from_latent(latent_pi)
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
+
+        if return_mean_actions:
+            return values, log_prob, entropy, mean_actions
         return values, log_prob, entropy
 
     def get_distribution(self, obs: PyTorchObs) -> Distribution:
@@ -761,7 +832,6 @@ class ActorCriticPolicy(BasePolicy):
         features = super().extract_features(obs, self.vf_features_extractor)
         latent_vf = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent_vf)
-
 
 class ActorCriticCnnPolicy(ActorCriticPolicy):
     """
@@ -799,7 +869,8 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         self,
         observation_space: spaces.Space,
         action_space: spaces.Space,
-        lr_schedule: Schedule,
+        lr_schedule_actor: Schedule,
+        lr_schedule_critic: Schedule,
         net_arch: Optional[Union[List[int], Dict[str, List[int]]]] = None,
         activation_fn: Type[nn.Module] = nn.Tanh,
         ortho_init: bool = True,
@@ -810,15 +881,17 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
         squash_output: bool = False,
         features_extractor_class: Type[BaseFeaturesExtractor] = NatureCNN,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        share_features_extractor: bool = True,
+        share_features_extractor: bool = False,
         normalize_images: bool = True,
-        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_actor: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_class_critic: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             observation_space,
             action_space,
-            lr_schedule,
+            lr_schedule_actor,
+            lr_schedule_critic,
             net_arch,
             activation_fn,
             ortho_init,
@@ -831,7 +904,8 @@ class ActorCriticCnnPolicy(ActorCriticPolicy):
             features_extractor_kwargs,
             share_features_extractor,
             normalize_images,
-            optimizer_class,
+            optimizer_class_actor,
+            optimizer_class_critic,
             optimizer_kwargs,
         )
 
@@ -883,7 +957,7 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
         squash_output: bool = False,
         features_extractor_class: Type[BaseFeaturesExtractor] = CombinedExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
-        share_features_extractor: bool = True,
+        share_features_extractor: bool = False,
         normalize_images: bool = True,
         optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
         optimizer_kwargs: Optional[Dict[str, Any]] = None,

@@ -17,6 +17,7 @@ def evaluate_policy(
     callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
     reward_threshold: Optional[float] = None,
     return_episode_rewards: bool = False,
+    return_rewards_evol: bool = False,
     warn: bool = True,
 ) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
     """
@@ -79,7 +80,8 @@ def evaluate_policy(
     # Divides episodes among different sub environments in the vector as evenly as possible
     episode_count_targets = np.array([(n_eval_episodes + i) // n_envs for i in range(n_envs)], dtype="int")
 
-    current_rewards = np.zeros(n_envs)
+    current_rewards = np.zeros(n_envs)    
+    rewards_evolutions = [[[] for j in range(n_eval_episodes)] for i in range(n_envs)]
     current_lengths = np.zeros(n_envs, dtype="int")
     observations = env.reset()
     states = None
@@ -95,6 +97,7 @@ def evaluate_policy(
         current_rewards += rewards
         current_lengths += 1
         for i in range(n_envs):
+            rewards_evolutions[i][episode_counts[i]].append(current_rewards[i])
             if episode_counts[i] < episode_count_targets[i]:
                 # unpack values so that the callback can access the local variables
                 reward = rewards[i]
@@ -122,6 +125,7 @@ def evaluate_policy(
                         episode_rewards.append(current_rewards[i])
                         episode_lengths.append(current_lengths[i])
                         episode_counts[i] += 1
+
                     current_rewards[i] = 0
                     current_lengths[i] = 0
 
@@ -134,6 +138,8 @@ def evaluate_policy(
     std_reward = np.std(episode_rewards)
     if reward_threshold is not None:
         assert mean_reward > reward_threshold, "Mean reward below threshold: " f"{mean_reward:.2f} < {reward_threshold:.2f}"
+    if return_rewards_evol:
+        return rewards_evolutions
     if return_episode_rewards:
         return episode_rewards, episode_lengths
     return mean_reward, std_reward

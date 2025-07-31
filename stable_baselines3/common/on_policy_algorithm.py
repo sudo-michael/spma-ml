@@ -1,6 +1,7 @@
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from copy import deepcopy
 
 import numpy as np
 import torch as th
@@ -61,7 +62,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         self,
         policy: Union[str, Type[ActorCriticPolicy]],
         env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule],
+        learning_rate_actor: Union[float, Schedule],
+        learning_rate_critic: Union[float, Schedule],
         n_steps: int,
         gamma: float,
         gae_lambda: float,
@@ -85,7 +87,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         super().__init__(
             policy=policy,
             env=env,
-            learning_rate=learning_rate,
+            learning_rate_actor=learning_rate_actor,
+            learning_rate_critic=learning_rate_critic,
             policy_kwargs=policy_kwargs,
             verbose=verbose,
             device=device,
@@ -132,9 +135,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             **self.rollout_buffer_kwargs,
         )
         self.policy = self.policy_class(  # type: ignore[assignment]
-            self.observation_space, self.action_space, self.lr_schedule, use_sde=self.use_sde, **self.policy_kwargs
+            self.observation_space, self.action_space, self.lr_schedule_actor, self.lr_schedule_critic , use_sde=self.use_sde, **self.policy_kwargs
         )
         self.policy = self.policy.to(self.device)
+
+        # keep track of the previous policy.
+        self.policy_old = deepcopy(self.policy)
 
     def collect_rollouts(
         self,
@@ -176,7 +182,12 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             with th.no_grad():
                 # Convert to pytorch tensor or to TensorDict
                 obs_tensor = obs_as_tensor(self._last_obs, self.device)
-                actions, values, log_probs = self.policy(obs_tensor)
+                # allowing for surrogate minimization with softmax rep if needed.
+                if self.softmax_rep:
+                    actions, values, log_probs, _ = self.policy.forward_softmax_rep(obs_tensor)
+                else:
+                    actions, values, log_probs = self.policy.forward(obs_tensor)
+                                
             actions = actions.cpu().numpy()
 
             # Rescale and perform action
