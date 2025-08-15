@@ -1,3 +1,4 @@
+from pprint import pprint
 import warnings
 from typing import Any, ClassVar, Dict, Optional, Type, TypeVar, Union
 
@@ -52,6 +53,7 @@ class SPMA(OnPolicyAlgorithm):
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     """
+
     policy_aliases: ClassVar[Dict[str, Type[BasePolicy]]] = {
         "MlpPolicy": ActorCriticPolicy,
     }
@@ -124,17 +126,17 @@ class SPMA(OnPolicyAlgorithm):
         # Sanity check, otherwise it will lead to noisy gradient and NaN
         # because of the advantage normalization
         if normalize_advantage:
-            assert (
-                batch_size > 1
-            ), "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
+            assert batch_size > 1, (
+                "`batch_size` must be greater than 1. See https://github.com/DLR-RM/stable-baselines3/issues/440"
+            )
 
         if self.env is not None:
             # Check that `n_steps * n_envs > 1` to avoid NaN
             # when doing advantage normalization
             buffer_size = self.env.num_envs * self.n_steps
-            assert buffer_size > 1 or (
-                not normalize_advantage
-            ), f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
+            assert buffer_size > 1 or (not normalize_advantage), (
+                f"`n_steps * n_envs` must be greater than 1. Currently n_steps={self.n_steps} and n_envs={self.env.num_envs}"
+            )
             # Check that the rollout buffer size is a multiple of the mini-batch size
             untruncated_batches = buffer_size // batch_size
             if buffer_size % batch_size > 0:
@@ -165,7 +167,6 @@ class SPMA(OnPolicyAlgorithm):
 
     def _setup_model(self) -> None:
         super()._setup_model()
-        
 
     def compute_actor_loss(self, rollout_data, actions, advantages, old_log_prob, backwards=False, curr_loss=None):
         # skip recompuing the loss if you already have it and just want to do a backward pass.
@@ -176,22 +177,22 @@ class SPMA(OnPolicyAlgorithm):
             # using approx kl for bregman div from Schulman blog: http://joschu.net/blog/kl-approx.html
             # approx kl is an unbiased estimator of the true kl but results in less variance.
             # alternative approach is to use bregman_div_loss = -1/self.eta * log_ratio
-            bregman_div_loss = 1/self.eta *((th.exp(log_ratio) - 1) - log_ratio)
+            bregman_div_loss = 1 / self.eta * ((th.exp(log_ratio) - 1) - log_ratio)
             curr_loss = th.mean(linear_loss + bregman_div_loss)
 
         # backward pass
         if backwards:
             self.policy.optimizer_act.zero_grad()
             curr_loss.backward()
-            
+
             return curr_loss, None, None
-        
+
         return curr_loss, linear_loss, bregman_div_loss
 
     def compute_critic_loss(self, rollout_data, actions, backwards=False, curr_loss=None):
         if curr_loss is None and backwards:
             raise ValueError("Can not perform backward pass without curr_loss.")
-            
+
         # skip recompuing the loss if you already have it and just want to do a backward pass.
         if curr_loss is None:
             # Re-sample the noise matrix because the log_std has changed
@@ -200,7 +201,7 @@ class SPMA(OnPolicyAlgorithm):
 
             # critic loss.
             curr_loss = F.mse_loss(rollout_data.returns, values)
-        
+
         # backward pass.
         if backwards:
             self.policy.optimizer_critic.zero_grad()
@@ -216,8 +217,7 @@ class SPMA(OnPolicyAlgorithm):
         """
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
-        self._update_learning_rate([('actor', self.policy.optimizer_act),
-                                    ('critic', self.policy.optimizer_critic)])
+        self._update_learning_rate([("actor", self.policy.optimizer_act), ("critic", self.policy.optimizer_critic)])
 
         # record losses and number of times the surrogate loss is not decreasing in the inner loop.
         linear_losses = []
@@ -227,6 +227,7 @@ class SPMA(OnPolicyAlgorithm):
         alpha_max_critic = self.alpha_max
         alpha_actor = 1.0
         alpha_critic = 1.0
+
         for epoch in range(self.n_epochs):
             # Do a complete pass on the rollout buffer
             for batch_idx, rollout_data in enumerate(self.rollout_buffer.get(self.batch_size)):
@@ -236,26 +237,33 @@ class SPMA(OnPolicyAlgorithm):
                     actions = rollout_data.actions.long().flatten()
 
                 old_log_prob = rollout_data.old_log_prob.clone()
-    
+
                 # Normalize advantage
+
                 advantages = rollout_data.advantages
+                th.save(
+                    {
+                        "obs": rollout_data.observations,
+                        "act": actions,
+                        "advantages": advantages,
+                        "old_log_prob": old_log_prob,
+                        "returns": rollout_data.returns,
+                    },
+                    "sb3_data.pt",
+                )
+                breakpoint()
                 # Normalization does not make sense if mini batchsize == 1, see GH issue #325
                 if self.normalize_advantage and len(advantages) > 1:
                     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-                
 
                 # build a closure for the actor and critic.
-                closure_actor = lambda backwards, curr_loss : self.compute_actor_loss(rollout_data, 
-                                                                                      actions, 
-                                                                                      advantages,
-                                                                                      old_log_prob,
-                                                                                      backwards=backwards, 
-                                                                                      curr_loss=curr_loss)
+                closure_actor = lambda backwards, curr_loss: self.compute_actor_loss(
+                    rollout_data, actions, advantages, old_log_prob, backwards=backwards, curr_loss=curr_loss
+                )
 
-                closure_critic = lambda backwards, curr_loss: self.compute_critic_loss(rollout_data,
-                                                                                       actions,
-                                                                                       backwards=backwards,
-                                                                                       curr_loss=curr_loss)
+                closure_critic = lambda backwards, curr_loss: self.compute_critic_loss(
+                    rollout_data, actions, backwards=backwards, curr_loss=curr_loss
+                )
                 # compute the actor loss.
                 loss_act, linear_loss, bregman_div_loss = closure_actor(backwards=False, curr_loss=None)
 
@@ -269,28 +277,35 @@ class SPMA(OnPolicyAlgorithm):
                 # using armijo vs adam for actor and critic.
                 grad_list = get_grad_list(self.policy.params_act)
                 grad_norm_actor = compute_grad_norm(grad_list)
+                breakpoint()
                 if self.use_armijo_actor:
                     # armijo for actor.
-                    alpha_actor = armijo_search(closure_actor, self.policy.params_act, grad_list, 
-                                                grad_norm_actor, alpha_max_actor, self.c_actor)
+                    alpha_actor = armijo_search(
+                        closure_actor, self.policy.params_act, grad_list, grad_norm_actor, alpha_max_actor, self.c_actor
+                    )
                     alpha_max_actor = alpha_actor * 1.8
 
                 else:
                     self.policy.optimizer_act.step()
 
-
                 grad_list = get_grad_list(self.policy.params_critic)
                 grad_norm_critic = compute_grad_norm(grad_list)
                 if self.use_armijo_critic:
                     # armijo for critic.
-                    alpha_critic = armijo_search(closure_critic, self.policy.params_critic, grad_list, 
-                                                 grad_norm_critic, alpha_max_critic, self.c_critic)
+                    alpha_critic = armijo_search(
+                        closure_critic, self.policy.params_critic, grad_list, grad_norm_critic, alpha_max_critic, self.c_critic
+                    )
                     alpha_max_critic = alpha_critic * 1.8
                 else:
                     self.policy.optimizer_critic.step()
-                
+
+                print(f"{epoch=}")
+                print(f"loss_actor={loss_act.item()} actor_grad_norm={grad_norm_actor} eta_actor={alpha_max_actor}")
+                print(f"loss_critic={loss_critic.item()} critic_grad_norm={grad_norm_critic} eta_critic={alpha_max_critic}")
+                breakpoint()
+
             self._n_updates += 1
-        
+
         # Logging.
         linear_losses.append(linear_loss.mean().item())
         bregman_div_losses.append(bregman_div_loss.mean().item())
@@ -303,7 +318,6 @@ class SPMA(OnPolicyAlgorithm):
         if hasattr(self.policy, "log_std"):
             self.logger.record("train/std", th.exp(self.policy.log_std).mean().item())
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
-
 
     def learn(
         self: SelfSPMA,

@@ -615,6 +615,7 @@ def armijo_search(closure, params, grad_list, grad_norm, alpha_max, c, beta=0.9)
             try:
                 next_loss, _, _ = closure(backwards=False, curr_loss=None)
             except ValueError:
+                print('catching value error')
                 alpha = alpha * beta
                 if ctr > 500:
                     alpha = 0

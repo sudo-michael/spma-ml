@@ -1,6 +1,11 @@
 import os
 import argparse
+import random
+
+import numpy as np
+import torch as th
 import wandb
+
 
 from stable_baselines3 import SPMA
 from stable_baselines3.common.monitor import Monitor
@@ -23,7 +28,7 @@ if __name__ in "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--use_wandb", type=str2bool, default=False, required=True)
-    parser.add_argument("--exp_name", type=str, required=True)
+    parser.add_argument("--exp_name", type=str, default='test', required=True)
 
     parser.add_argument("--env_id", type=str, required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -33,15 +38,18 @@ if __name__ in "__main__":
     spma_parser = algo_parsers.add_parser("SPMA")
     spma_parser.add_argument("--n_steps", type=int, default=2048)
     spma_parser.add_argument("--batch_size", type=int, default=2048)
-    spma_parser.add_argument("--use_armijo_actor", type=str2bool, default=False)
-    spma_parser.add_argument("--use_armijo_critic", type=str2bool, default=False)
-    spma_parser.add_argument("--total_timesteps", type=int, default=409600)
-    spma_parser.add_argument("--n_epochs", type=int, default=10)
+    spma_parser.add_argument("--use_armijo_actor", type=str2bool, default=True)
+    spma_parser.add_argument("--use_armijo_critic", type=str2bool, default=True)
+    spma_parser.add_argument("--total_timesteps", type=int, default=4096000)
+    spma_parser.add_argument("--n_epochs", type=int, default=5)
     spma_parser.add_argument("--eta", type=float)
 
     args = parser.parse_args()
 
+
     config = vars(args)
+    
+    print(config)
 
     # exclude arguments not apart of SPMA parameters
     use_wandb = config.pop("use_wandb")
@@ -69,7 +77,10 @@ if __name__ in "__main__":
             config=config,
             sync_tensorboard=True,
         )
-
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    th.manual_seed(args.seed)
+    th.backends.cudnn.deterministic = True
 
     model = SPMA("MlpPolicy", env_id, timesteps, **config)
     logger = configure(log_dir, ["stdout", "csv", "tensorboard"])

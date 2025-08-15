@@ -172,6 +172,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         if self.use_sde:
             self.policy.reset_noise(env.num_envs)
 
+
         callback.on_rollout_start()
 
         while n_steps < n_rollout_steps:
@@ -203,6 +204,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                     # as we are sampling from an unbounded Gaussian distribution
                     clipped_actions = np.clip(actions, self.action_space.low, self.action_space.high)
 
+            print(f"step={n_steps}\nobs={self._last_obs}\naction={clipped_actions}")
             new_obs, rewards, dones, infos = env.step(clipped_actions)
 
             self.num_timesteps += env.num_envs

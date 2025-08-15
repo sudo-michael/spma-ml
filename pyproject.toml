@@ -42,6 +42,7 @@ dependencies = [
     "matplotlib",
     "wandb>=0.21.0",
     "tensorboard>=2.14.0",
+    "ipykernel>=6.29.5",
 ]
 
 [project.optional-dependencies]
